@@ -1,0 +1,61 @@
+---
+title: "BroConn"
+author: "Michael Winn"
+date: "October 21, 2016"
+output: html_document
+---
+
+```{r input, echo = FALSE, message = FALSE, warning = FALSE}
+    
+    knitr::opts_chunk$set(fig.width=10, 
+                   fig.height=5,
+                   echo=FALSE,
+                   warning=FALSE)
+
+    require(ggplot2)
+    require(psych)
+    require(scatterplot3d)
+    require(dplyr)
+
+    files <- list.files(path=".", pattern="*.txt")
+    
+    data <- lapply(files, read.csv, sep="\t", header=TRUE, stringsAsFactor = FALSE)
+    data <- do.call("rbind", data)
+    
+    data$id.orig_h <- as.factor(data$id.orig_h)
+    data$id.resp_h <- as.factor(data$id.resp_h) 
+    data$duration <- as.numeric(data$duration)
+    data$duration[is.na(data$duration)] <- 0
+    
+    data$connection <- paste(data$id.orig_h,":",data$id.resp_h)
+    
+    data$orig_bytes <- as.numeric(data$orig_bytes)
+    data$orig_bytes[is.na(data$orig_bytes)] <- 0
+    
+    data$resp_bytes <- as.numeric(data$resp_bytes)
+    data$resp_bytes[is.na(data$resp_bytes)] <- 0
+    
+    data$missed_bytes <- as.numeric(data$missed_bytes)
+    data$missed_bytes[is.na(data$missed_bytes)] <- 0
+    
+    data$total_bytes <- data$orig_bytes + data$resp_bytes + data$missed_bytes
+    
+    conns <- arrange(aggregate(data$duration, by = list(data$proto, data$connection), length), desc(x))
+    colnames(conns) <- c("proto", "conn", "count")
+    
+    bytes <- arrange(aggregate(data$total_bytes, by = list(data$proto, data$connection), sum), desc(x))
+    colnames(bytes) <- c("proto", "conn", "total_bytes")        
+            
+    # 
+    # data$DATE <- as.Date(data$DATE, format = "%d-%b-%Y")
+    # # data$DATE <- as.factor(data$DATE)
+    # data$HOST <- as.factor(data$HOST)
+    # 
+    # data$HOURS <- matrix(unlist(strsplit(data$TIME, ":")), ncol = 2, byrow = TRUE)[,1]
+    # data$HOURS <- as.factor(data$HOURS)
+    # 
+    # data$TARGET <- as.factor(data$TARGET)
+    # 
+    # data$TARGET.host <- sub('\\(.*', '', data$TARGET)
+    # data$TARGET.location <- sub('\\).*', '', sub('.*\\(', '', data$TARGET))
+```
