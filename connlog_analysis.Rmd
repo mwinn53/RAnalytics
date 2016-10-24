@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r input, echo = FALSE, message = FALSE, warning = FALSE}
-    
+
     knitr::opts_chunk$set(fig.width=10, 
                    fig.height=5,
                    echo=FALSE,
@@ -14,38 +14,125 @@ output: html_document
 
     require(ggplot2)
     require(psych)
-    require(scatterplot3d)
     require(dplyr)
+    require(igraph)
+    require(gdata)
+
+    rm(list = ls())
+
 
     files <- list.files(path=".", pattern="*.txt")
-    
+
     data <- lapply(files, read.csv, sep="\t", header=TRUE, stringsAsFactor = FALSE)
     data <- do.call("rbind", data)
+
+    # data$id.orig_h <- as.factor(data$id.orig_h)
+    # data$id.resp_h <- as.factor(data$id.resp_h) 
+    # data$duration <- as.numeric(data$duration)
+    # data$duration[is.na(data$duration)] <- 0
+    # 
+    # data$connection <- paste(data$id.orig_h,":",data$id.resp_h)
+    # 
+    # data$orig_bytes <- as.numeric(data$orig_bytes)
+    # data$orig_bytes[is.na(data$orig_bytes)] <- 0
+    # 
+    # data$resp_bytes <- as.numeric(data$resp_bytes)
+    # data$resp_bytes[is.na(data$resp_bytes)] <- 0
+    # 
+    # data$missed_bytes <- as.numeric(data$missed_bytes)
+    # data$missed_bytes[is.na(data$missed_bytes)] <- 0
+    # 
+    # data$total_bytes <- data$orig_bytes + data$resp_bytes + data$missed_bytes
+    # 
+    # ## Building the connections table and graph
+    # summary.conns <- arrange(aggregate(data$duration, by = list(data$proto, data$vlan, data$id.orig_h, data$id.resp_h), length), desc(x))
+    # colnames(summary.conns) <- c("proto", "VLAN", "src", "dst", "total_conns")
+    # 
+    # 
+    # edges <- data.frame(summary.conns$src, summary.conns$dst, summary.conns$total_conns)
+      
+#################################################
     
-    data$id.orig_h <- as.factor(data$id.orig_h)
-    data$id.resp_h <- as.factor(data$id.resp_h) 
-    data$duration <- as.numeric(data$duration)
-    data$duration[is.na(data$duration)] <- 0
+    # Build vertex list
+    temp <- select(data, id.orig_h, id.resp_h)
     
-    data$connection <- paste(data$id.orig_h,":",data$id.resp_h)
+    O <-  arrange(count(temp, id.orig_h), desc(n))
+    O$id.orig_h <- as.character(O$id.orig_h)
     
-    data$orig_bytes <- as.numeric(data$orig_bytes)
-    data$orig_bytes[is.na(data$orig_bytes)] <- 0
+    R <- arrange(count(temp, id.resp_h), desc(n))
+    R$id.resp_h <- as.character(R$id.resp_h)
     
-    data$resp_bytes <- as.numeric(data$resp_bytes)
-    data$resp_bytes[is.na(data$resp_bytes)] <- 0
+    names(O) <- c("src", "n")
+    names(R) <- c("src", "n")
     
-    data$missed_bytes <- as.numeric(data$missed_bytes)
-    data$missed_bytes[is.na(data$missed_bytes)] <- 0
+    # nodes <- merge(O, R, by = "src")
+    # try
+    nodes <- rbind(O, R)
+    nodes <- aggregate(n ~ src, data = nodes, FUN = sum)
     
-    data$total_bytes <- data$orig_bytes + data$resp_bytes + data$missed_bytes
+    names(nodes) <- c("IP", "total_conn")
+    # nodes$total_conn <- nodes$s_conn + nodes$d_conn
     
-    conns <- arrange(aggregate(data$duration, by = list(data$proto, data$connection), length), desc(x))
-    colnames(conns) <- c("proto", "conn", "count")
+    # Set the vertex size as a ratio of total connections (max size is 15)
+    nodes$vsize <- ((nodes$total_conn/sum(nodes$total_conn))*15) 
     
-    bytes <- arrange(aggregate(data$total_bytes, by = list(data$proto, data$connection), sum), desc(x))
-    colnames(bytes) <- c("proto", "conn", "total_bytes")        
-            
+    # Cleanup and diagnostics
+    rm(O)
+    rm(R)
+    rm(temp)
+    
+    head(arrange(nodes, desc(total_conn)))
+    
+    
+    # Build edge list
+    temp <- select(data, id.orig_h, id.resp_h, proto, orig_bytes, resp_bytes)
+    temp$orig_bytes <- as.numeric(temp$orig_bytes)
+    temp$resp_bytes <- as.numeric(temp$resp_bytes)
+    
+    temp$total_bytes <- temp$orig_bytes + temp$resp_bytes
+    
+    edges <- summarise(group_by(temp, id.orig_h, id.resp_h, proto), total_bytes = sum(total_bytes))
+    
+    # cleanup and diagnostics
+    rm(temp) 
+    
+    
+    # For display
+    # humanReadable(sum(total_bytes), standard="SI")
+    
+    # build the graph
+    g <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE) # Builds the basic igraph object
+    
+    colrs <- c("gray50", "tomato", "gold")
+    # V(g)$color <- colrs[V(g)$
+    
+    l <- layout_with_fr(g)
+    l <- layout_randomly(g)
+    l <- layout_in_circle(g)
+    l <- layout_with_gem(g)
+    
+    plot(g,                         # Configures the aesthetics of the plot
+         vertex.size = 1,                 # Vertex size is a function of the total number of connections
+         vertex.label = V(g)$name,        # Vertex name should be the node name (IP address)
+         vertex.label.size
+                                          # Edge weight is a function of the number of bytes transferred
+                                          # Edge color is a protocol (ICMP, TCP, UDP)
+         edge.arrow.size = .01,
+         edge.curved = .1, 
+         layout = l)
+                                          
+    
+    
+    
+    
+    
+    
+    ## Building the bytes table and graph
+    # summary.bytes <- arrange(aggregate(data$total_bytes, by = list(data$proto, data$vlan, data$id.orig_h, data$id.resp_h), sum), desc(x))
+    # colnames(summary.bytes) <- c("proto", "VLAN", "src", "dst", "total_bytes")
+    #         
+    # conn <- cbind(as.character(data$id.orig_h), as.character(data$id.resp_h))
+    
     # 
     # data$DATE <- as.Date(data$DATE, format = "%d-%b-%Y")
     # # data$DATE <- as.factor(data$DATE)
