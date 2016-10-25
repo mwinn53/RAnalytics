@@ -5,21 +5,20 @@ date: "October 21, 2016"
 output: html_document
 ---
 
-```{r input, echo = FALSE, message = FALSE, warning = FALSE}
+```{r parseinput, echo = FALSE, message = FALSE, warning = FALSE}
 
     knitr::opts_chunk$set(fig.width=10, 
                    fig.height=5,
                    echo=FALSE,
                    warning=FALSE)
-
+    rm(list = ls())
+     
     require(ggplot2)
     require(psych)
+    require(scatterplot3d)
     require(dplyr)
     require(igraph)
     require(gdata)
-
-    rm(list = ls())
-
 
     files <- list.files(path=".", pattern="*.txt")
 
@@ -50,10 +49,12 @@ output: html_document
     # 
     # 
     # edges <- data.frame(summary.conns$src, summary.conns$dst, summary.conns$total_conns)
-      
-#################################################
+```
+
+
+```{r networkdata, echo = FALSE, message = FALSE, warning = FALSE}
     
-    # Build vertex list
+    ### Build vertex list: combine all unique source IPs and dest IPs with a total of combined occurrences
     temp <- select(data, id.orig_h, id.resp_h)
     
     O <-  arrange(count(temp, id.orig_h), desc(n))
@@ -65,16 +66,18 @@ output: html_document
     names(O) <- c("src", "n")
     names(R) <- c("src", "n")
     
-    # nodes <- merge(O, R, by = "src")
-    # try
     nodes <- rbind(O, R)
     nodes <- aggregate(n ~ src, data = nodes, FUN = sum)
     
     names(nodes) <- c("IP", "total_conn")
-    # nodes$total_conn <- nodes$s_conn + nodes$d_conn
-    
-    # Set the vertex size as a ratio of total connections (max size is 15)
-    nodes$vsize <- ((nodes$total_conn/sum(nodes$total_conn))*15) 
+
+    # Embed the vertex.size attribute as a function of quantiles (width = 10) of total connections
+    nodes$vsize <- as.integer(with(nodes, 
+                                   cut(total_conn, 
+                                       breaks = quantile(total_conn, probs = 0:10/10))), 
+                              na.rm = TRUE, include.lowest = TRUE)
+    nodes$vsize[is.na(nodes$vsize)] <- 1
+    # nodes <- mutate(nodes, vsize = ifelse(vsize < 1, 1, vsize))
     
     # Cleanup and diagnostics
     rm(O)
@@ -84,7 +87,7 @@ output: html_document
     head(arrange(nodes, desc(total_conn)))
     
     
-    # Build edge list
+    ### Build edge list
     temp <- select(data, id.orig_h, id.resp_h, proto, orig_bytes, resp_bytes)
     temp$orig_bytes <- as.numeric(temp$orig_bytes)
     temp$resp_bytes <- as.numeric(temp$resp_bytes)
@@ -93,39 +96,109 @@ output: html_document
     
     edges <- summarise(group_by(temp, id.orig_h, id.resp_h, proto), total_bytes = sum(total_bytes))
     
+    # edges$total_bytes[is.na(edges$total_bytes)] <- 0
+    edges <- subset(edges, !is.na(total_bytes))
+  
+    edges$width <- as.integer(with(edges, 
+                                   cut(total_bytes, 
+                                       breaks = quantile(total_bytes, probs = 1:10/10))), 
+                              na.rm = TRUE, include.lowest = TRUE)
+    edges$width[is.na(edges$width)] <- 1
+    
     # cleanup and diagnostics
     rm(temp) 
     
     
     # For display
     # humanReadable(sum(total_bytes), standard="SI")
+```
+
+
+Initial analysis of the logs contained in `r files` 
+covered a period of time from `r format(as.POSIXlt(min(data$ts), origin = "1970-01-01"), "%d-%b-%Y %H:%M:%S")` 
+to `r format(as.POSIXlt(max(data$ts), origin = "1970-01-01"), "%d-%b-%Y %H:%M:%S")` 
+(`r as.POSIXct(max(data$ts), origin = "1970-01-01") - as.POSIXct(min(data$ts), origin = "1970-01-01")`). 
+During that time period, there were `r length(nodes$IP)` 
+unique nodes with `r length(edges$id.orig_h)` unique connections.
+
+```{r networkgraph, echo = FALSE, message = FALSE, warning = FALSE}
+
+    ### Build the graph
+    require(igraph)
     
-    # build the graph
     g <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE) # Builds the basic igraph object
     
-    colrs <- c("gray50", "tomato", "gold")
-    # V(g)$color <- colrs[V(g)$
+    colrs <- c("green", "tomato", "blue")
+    E(g)$colors <- colrs[as.factor(E(g)$proto)]
     
+    # l <- layout_nicely(g)
+    # l <- layout_on_grid(g)
+    # l <- layout_on_sphere(g)
     l <- layout_with_fr(g)
-    l <- layout_randomly(g)
-    l <- layout_in_circle(g)
-    l <- layout_with_gem(g)
+    # l <- layout_with_kk(g)
+    # l <- layout_with_mds(g)
+    # l <- layout_with_drl(g)
+    # l <- layout_with_lgl(g)
+    # l <- layout_with_dh(g)
+    # l <- layout_with_fr(g)
     
-    plot(g,                         # Configures the aesthetics of the plot
-         vertex.size = 1,                 # Vertex size is a function of the total number of connections
-         vertex.label = V(g)$name,        # Vertex name should be the node name (IP address)
-         vertex.label.size
-                                          # Edge weight is a function of the number of bytes transferred
-                                          # Edge color is a protocol (ICMP, TCP, UDP)
-         edge.arrow.size = .01,
-         edge.curved = .1, 
-         layout = l)
-                                          
+    l <- norm_coords(l, ymin = -1, ymax = 1, xmin = -1, xmax = 1)
     
+    par(mfrow = c(2, 2), mar = c(0, 0, 0, 0))
+    plot(g, rescale = F, layout = l*0.4)
+    plot(g, rescale = F, layout = l*0.6)
+    plot(g, rescale = F, layout = l*0.8)
+    plot(g, rescale = F, layout = l*1.0)
     
+      
+    plot(g,                                     # Configures the aesthetics of the plot
+       # vertex.size =  as.integer(V(g)$vsize),   # Vertex size is a function of the total number of connections
+       vertex.size = coreness(g)*5,
+       vertex.label = V(g)$name,                # Vertex name should be the node name (IP address)
+       # vertex.label.family = "Times",
+       vertex.label.cex = .75,
+       vertex.label.degree = 1,
+       # vertex.shape = "pie",
+       edge.width = E(g)$width,                 # Edge weight is a function of the number of bytes transferred
+       edge.color = E(g)$colors,                # Edge color is a protocol (ICMP, TCP, UDP)
+       edge.arrow.size =  E(g)$width*0.1,
+       edge.curved = TRUE, 
+       layout = l
+       )
     
-    
-    
+    legend(x = -1.5, 
+           y = -1.1, 
+           c("icmp", "tcp", "udp"), 
+           pch = 21, 
+           col = "#777777", 
+           pt.bg = colrs, 
+           pt.cex = 2, 
+           cex = .8,
+           bty = "n",
+           ncol = 1
+           )
+```  
+  
+```{r graphstats, echo = FALSE, message = FALSE, warning = FALSE}
+mean(nodes$total_bytes)
+sd(nodes$total_bytes)
+mean(edges$total_bytes)
+sd(edges$total_bytes)
+
+reciprocity(g)
+diameter(g)
+
+hist(degree(g))
+
+```
+
+```{r heatmap, echo = FALSE, message = FALSE, warning = FALSE}
+  netm <- get.adjacency(g, attr = "width", sparse = F)
+  colnames(netm) <- V(g)$proto
+  rownames(netm) <- V(g)$proto
+  palf <- colorRampPalette(c("gold", "dark orange"))
+  heatmap(netm, Rowv = NA, Colv = NA, col = palf(100), scale = "none", margins = c(10, 10))
+```
     
     ## Building the bytes table and graph
     # summary.bytes <- arrange(aggregate(data$total_bytes, by = list(data$proto, data$vlan, data$id.orig_h, data$id.resp_h), sum), desc(x))
@@ -145,4 +218,3 @@ output: html_document
     # 
     # data$TARGET.host <- sub('\\(.*', '', data$TARGET)
     # data$TARGET.location <- sub('\\).*', '', sub('.*\\(', '', data$TARGET))
-```
