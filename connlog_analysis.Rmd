@@ -35,15 +35,24 @@ output: html_document
     data$proto <- as.factor(data$proto)
     # data$vlan <- as.factor(data$vlan)
     
+    data$orig_bytes <- as.numeric(data$orig_bytes)
+    data$orig_bytes[is.na(data$orig_bytes)] <- 0
+    
+    data$resp_bytes <- as.numeric(data$resp_bytes)
+    data$resp_bytes[is.na(data$resp_bytes)] <- 0
+    
+    data$total_bytes <- data$orig_bytes + data$resp_bytes
+    
+    
+    
+    
 ```
 
 
 ```{r networkdata, echo = FALSE, message = FALSE, warning = FALSE}
     ### Build edge list
-    temp <- select(data, id.orig_h, id.resp_h, proto, orig_bytes, resp_bytes, duration, vlan, service)
-      temp$orig_bytes <- as.numeric(temp$orig_bytes) 
-      temp$resp_bytes <- as.numeric(temp$resp_bytes)
-      temp$total_bytes <- temp$orig_bytes + temp$resp_bytes
+    temp <- select(data, id.orig_h, id.resp_h, proto, total_bytes, duration, vlan, service)
+
       
     edges <- summarise(group_by(temp, id.orig_h, id.resp_h, vlan, proto, service), total_bytes = sum(total_bytes))
       edges$vlan <- as.factor(edges$vlan)
@@ -97,6 +106,20 @@ to `r tm_to`
 (`r tm_duration`). 
 During that time period, there were `r num_nodes` 
 unique nodes with `r num_conn` unique connections.
+There are `r length(unique((data$vlan))` unique VLANs identified
+
+`r round(sum(data$missed_bytes)/sum(data$total_bytes)*100, 2)`% packet loss
+
+
+```{r summary, echo = FALSE, message = FALSE, warning = FALSE}
+
+  gg <- ggplot(data, aes(x=as.factor(vlan))) +
+    geom_bar(stat = "count") +
+    labs(x = "VLAN ID", y = "Frequency") +
+    ggtitle("VLAN Density")
+    
+```
+
 
 ```{r networkgraph, echo = FALSE, message = FALSE, warning = FALSE}
 

@@ -1,0 +1,45 @@
+SummarySE Function
+
+					      count sum		mean	var		sd	 sem ci
+	orig_bytes
+	resp_bytes
+	missed_bytes
+
+		(% drop ratio) = (sum(orig_bytes) + sum(resp_bytes)) / sum(missed_bytes)
+
+	orig_ip_bytes
+	resp_ip_bytes
+
+	orig_pkts
+	resp_pkts
+
+summarisation <- summarise(group_by(data, proto), 
+  n = n(), sum = sum(orig_ip_bytes+resp_ip_bytes), 
+  mean = mean(orig_ip_bytes+resp_ip_bytes), 
+  variance = var(orig_ip_bytes+resp_ip_bytes))
+
+
+plots
+	Histogram (connections by VLAN)
+	Boxplot summaries (bytes, packets, and duration, by VLAN)
+	Heatmap
+	
+graph
+	Overall graph (yarnball)
+	By-protocol tri-graph
+		Diagnostics
+			Density
+			Reciprocity
+			Transitivity
+			Diameter
+			Node degree distribution (hist + scatter)
+		
+		Analysis
+			Subgroups and communities
+			Hubs / Authorities
+			K-Core decomp
+			Assortativity and Homphily
+	
+	Subgraphs (By-node connections (x1 source node and adjacencies))
+		Boxplot by (dst_ip, service) x (duration, total_bytes)
+		
