@@ -7,7 +7,7 @@ output: html_document
 
 ```{r parseInput, echo = FALSE, message = FALSE, warning = FALSE}
 
-    knitr::opts_chunk$set(fig.width=8, 
+    knitr::opts_chunk$set(fig.width=12, 
                    fig.height=8,
                    echo=FALSE,
                    warning=FALSE,
@@ -22,6 +22,8 @@ output: html_document
     require(gdata)
     require(reshape2)
     require(scales)
+    require(grid)
+    
     
     ### READ FILE DATA ###########################################################################
     files <- list.files(path=".", pattern="\\.log$")
@@ -90,15 +92,41 @@ output: html_document
       # return(result[c(2,3,14,4,13,15,16)])  ## Return filtered to n, mean, var, sd, se, sem, and ci
     }
     
+    ## Function:    buildEdgeList
+    #   Purpose:    Builds an edge list of unique vertices extracted from the connection log
+    #   Input:      connLog as a data frame
+    #   Output:     data frame  (id.orig_h, id.resp_h, proto, total_bytes, duration, vlan, service) 
+    #               of connections between nodes, summarized by total number of bytes.
+    buildEdgeList <- function(connlog) {
+      ### Build edge list
+      
+      temp <- select(connlog, id.orig_h, id.resp_h, proto, total_bytes, duration, vlan, service)
+
+      edges <- summarise(group_by(temp, id.orig_h, id.resp_h, vlan, proto, service), total_bytes = sum(total_bytes))
+        edges$vlan <- as.factor(edges$vlan)
+        edges$service <- as.factor(edges$service)
+        edges <- subset(edges, !is.na(total_bytes))
+        edges$width <- as.integer(with(edges,
+                                       cut(total_bytes,
+                                           breaks = quantile(total_bytes, probs = 1:10/10))),
+                                  na.rm = TRUE, include.lowest = TRUE)
+  
+        edges$width[is.na(edges$width)] <- 1
+        
+      return(edges)
+      
+    }
+    
     ## Function:    buildVertexList
     #   Purpose:    Builds a vertex list of unique vertices extracted from the edge list
     #   Input:      edgeList. A data frame consisting of at least an originator (id.orig_h) 
     #               and responder (id.resp_h) vector
     #   Output:     data frame  (IP, total_conn) of nodes and a count of their total number occcurrences.
-    
     buildVertexList <- function(edgeList) {
       
-      temp <- select(edgeList, id.orig_h, id.resp_h)
+      edgeList <- ungroup(edgeList)
+      
+      temp <- select(edgeList, id.orig_h, id.resp_h) 
     
       O <-  arrange(count(temp, id.orig_h), desc(n))
       O$id.orig_h <- as.character(O$id.orig_h)
@@ -115,8 +143,36 @@ output: html_document
       names(nodes) <- c("IP", "total_conn")
       
       return(nodes)
-    
     }
+    
+    ## Lifted from http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_%28ggplot2%29/
+    multiplot <- function(..., plotlist = NULL, file, cols = 1, layout = NULL) {
+    
+      plots <- c(list(...), plotlist)
+    
+      numPlots = length(plots)
+    
+      if (is.null(layout)) {
+        layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                        ncol = cols, nrow = ceiling(numPlots/cols))
+      }
+    
+      if (numPlots == 1) {
+        print(plots[[1]])
+    
+      } else {
+        grid.newpage()
+        pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+        for (i in 1:numPlots) {
+          matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+    
+          print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                          layout.pos.col = matchidx$col))
+        }
+      }
+    }
+
     
 ```
 
@@ -137,41 +193,10 @@ Summary statistics of the overall data set, followed by lists of the IP Addresse
 
 ```{r networkData, echo = FALSE, message = FALSE, warning = FALSE}
     
-  ### Build edge list
-    temp <- select(data, id.orig_h, id.resp_h, proto, total_bytes, duration, vlan, service)
-
-      
-    edges <- summarise(group_by(temp, id.orig_h, id.resp_h, vlan, proto, service), total_bytes = sum(total_bytes))
-      edges$vlan <- as.factor(edges$vlan)
-      edges$service <- as.factor(edges$service)
-      edges <- subset(edges, !is.na(total_bytes))
-      edges$width <- as.integer(with(edges,
-                                     cut(total_bytes,
-                                         breaks = quantile(total_bytes, probs = 1:10/10))),
-                                na.rm = TRUE, include.lowest = TRUE)
-
-      edges$width[is.na(edges$width)] <- 1
-
+  ### Build edge and node lists
+    edges <- buildEdgeList(data)
   
-  ## [TODO] Extract as a function
-  ### Build vertex list: combine all unique source IPs and dest IPs with a total of combined occurrences
-
-    nodes <- buildVertexList(data)
-    # temp <- select(data, id.orig_h, id.resp_h)
-    # 
-    # O <-  arrange(count(temp, id.orig_h), desc(n))
-    # O$id.orig_h <- as.character(O$id.orig_h)
-    # 
-    # R <- arrange(count(temp, id.resp_h), desc(n))
-    # R$id.resp_h <- as.character(R$id.resp_h)
-    # 
-    # names(O) <- c("src", "n")
-    # names(R) <- c("src", "n")
-    # 
-    # nodes <- rbind(O, R)
-    # nodes <- aggregate(n ~ src, data = nodes, FUN = sum)
-    # 
-    # names(nodes) <- c("IP", "total_conn")
+    nodes <- buildVertexList(edges)
 
   ### Calculate additional descriptive variables    
     num_nodes <- length(nodes$IP)
@@ -185,9 +210,18 @@ Summary statistics of the overall data set, followed by lists of the IP Addresse
     # nodes$vsize[is.na(nodes$vsize)] <- 1
     # nodes <- mutate(nodes, vsize = ifelse(vsize < 1, 1, vsize))
     
-    ex <- select(data, orig_bytes, resp_bytes, missed_bytes, total_bytes, orig_ip_bytes, resp_ip_bytes, total_ip_bytes, orig_pkts, resp_pkts, total_pkts)
-    
-    summarizeColumns(ex)[c(2,3,14,4,13,15,16)]
+    summarizeColumns(select(data, 
+                            orig_bytes, 
+                            resp_bytes, 
+                            missed_bytes, 
+                            total_bytes, 
+                            orig_ip_bytes, 
+                            resp_ip_bytes, 
+                            total_ip_bytes, 
+                            orig_pkts, 
+                            resp_pkts, 
+                            total_pkts)
+                     )[c(2,3,14,4,13,15,16)]
     
     head(arrange(nodes, desc(total_conn)), 10)
     head(arrange(nodes, total_conn), 10)
@@ -218,22 +252,20 @@ bro measures originator and responder bytes from observed TCP sequence numbers. 
 ```
 
 ```{r summary, echo = FALSE, message = FALSE, warning = FALSE}
-  # par(mfrow = c(1, 2), mar = c(0, 0, 0, 0))
-
-  g <- ggplot(data, aes(x=as.factor(vlan))) +
+  g1 <- ggplot(data, aes(x=as.factor(vlan))) +
     geom_bar(stat = "count") +
     labs(x = "VLAN ID" , y = "Frequency") +
-    ggtitle("Overall VLAN Density")
-  print(g)
+    ggtitle("Overall VLAN Density") +
+    theme(axis.text.x  = element_text(angle=45))
   
-  g <- ggplot(data, aes(x=as.factor(service))) +
+  g2 <- ggplot(data, aes(x=as.factor(service))) +
     geom_bar(stat = "count") +
     labs(x = "Service" , y = "Frequency") +
-    ggtitle("Overall Service Density")
-  print(g)
+    ggtitle("Overall Service Density") +
+    theme(axis.text.x  = element_text(angle=45))
+
+  multiplot(g1, g2, cols = 2)
   
-  # par(mfrow = c(1, 1), mar = c(0, 0, 0, 0))
-    
 ```
 
 * *[TODO] Discussion of the heatmap*
@@ -241,10 +273,8 @@ bro measures originator and responder bytes from observed TCP sequence numbers. 
 
 ```{r heatmap, echo = FALSE, message = FALSE, warning = FALSE}
   d <- select(data, vlan, service, total_pkts)
-  
   m <- acast(d, vlan ~ service, value.var = "total_pkts")
-
-  heatmap(m, col = topo.colors(max(length(unique(data$vlan)), length(unique(data$service)))), main = "Total Packets between VLANs and services", xlab = "service", ylab = "VLAN ID")
+  h1 <- heatmap(m, col = topo.colors(max(length(unique(data$vlan)), length(unique(data$service)))), main = "Total Packets between VLANs and services", xlab = "service", ylab = "VLAN ID")
   
 ```
    
@@ -368,7 +398,7 @@ The following graph separates the network communications by protocol (e.g. `r le
          layout = l,
          
         
-         frame = TRUE,
+         frame = FALSE,
          main = paste("Network graph by Protocol (", prot, ")")
          ) 
       
