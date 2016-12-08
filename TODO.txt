@@ -1,3 +1,24 @@
+Aesthetics: 
+  Fix time conversion (up front), byte sizes, and packet loss.
+
+  Tilt x-axis labels 45-90 degrees.
+
+  Graph lines (Solid for mean, dashed for median; BOLD for population, normal for sample). Include a legend if possible/
+
+  Error checking for single-node ANOVA comparisions.
+
+  Include summary stats for subgraph section.
+  
+  More efficienct calculations for the subgraph (e.g., don't redo population stats from )
+
+
+[FUTURE] 
+  Accumulate (e.g. save) summary results of daily analysis, then compare (hypothesis testing) additional days.
+
+------------------------------------------------------------------------------------------------------------------------
+
+
+
 SummarySE Function
 
 					      count sum		mean	var		sd	 sem ci
@@ -12,11 +33,8 @@ SummarySE Function
 
 	orig_pkts
 	resp_pkts
-
-summarisation <- summarise(group_by(data, proto), 
-  n = n(), sum = sum(orig_ip_bytes+resp_ip_bytes), 
-  mean = mean(orig_ip_bytes+resp_ip_bytes), 
-  variance = var(orig_ip_bytes+resp_ip_bytes))
+	
+col.summary <- summarize(data, n = length(orig_bytes), mean=mean(orig_bytes), var = var(orig_bytes), sd = sd(orig_bytes), sem = sd(orig_bytes)/sqrt(length(orig_bytes)), ci = qt(.95/2+.5, length(orig_bytes)))
 
 
 plots

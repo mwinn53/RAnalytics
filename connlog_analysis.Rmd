@@ -11,18 +11,32 @@ output: html_document
                    fig.height=8,
                    echo=FALSE,
                    warning=FALSE,
-                   options(scipen=999))
+                   options(scipen=999),
+                   cache = TRUE)
     rm(list = ls())
-     
-    require(ggplot2)
-    require(psych)
-    require(scatterplot3d)
-    require(dplyr)
-    require(igraph)
-    require(gdata)
-    require(reshape2)
-    require(scales)
-    require(grid)
+    
+    ### INSTALL AND LOAD REQUIRED PACKAGES #######################################################
+    required.packages <- c("ggplot2", 
+                           "psych", 
+                           "dplyr", 
+                           "igraph", 
+                           "gdata", 
+                           "reshape2", 
+                           "scales",
+                           "grid", 
+                           "gridExtra",
+                           "lattice"
+                           # "devtools", 
+                           # "multigraph",
+                           # "rcharts"
+                           )
+    
+    new.packages <- required.packages[!(required.packages %in% installed.packages()[,"Package"])]
+    if(length(new.packages)) install.packages(new.packages)
+    
+    # Output stored in the 'files' variable to suppress output while minimizing objects;
+    # the files object is reassigned in the next statement.
+    files <- lapply(required.packages, require, character.only = TRUE, quietly = TRUE)
     
     
     ### READ FILE DATA ###########################################################################
@@ -33,14 +47,29 @@ output: html_document
     ### CALCULATE DESCRIPTIVE VARIABLES ##########################################################
     tm_from <- format(as.POSIXlt(min(data$ts), origin = "1970-01-01"), "%d-%b-%Y %H:%M:%S")
     tm_to <- format(as.POSIXlt(max(data$ts), origin = "1970-01-01"), "%d-%b-%Y %H:%M:%S")
-    tm_duration <- as.POSIXlt(max(data$ts), origin = "1970-01-01") - as.POSIXlt(min(data$ts), origin = "1970-01-01")
+    tm_duration <- as.numeric(difftime(as.POSIXct(max(data$ts), origin = "1970-01-01"), 
+                            as.POSIXct(min(data$ts), origin = "1970-01-01"), 
+                            units = "hours"))
 
-    ### FIX DATA TYPES AND SYNTESIZE MISSING VECTORS #############################################
+    ### SET DATA TYPES AND SYNTESIZE MISSING VECTORS #############################################
+    
+    # originator / responder IP address and port
+    data$id.orig_h  <- as.factor(data$id.orig_h)
+      # data$id.orig_p  <- as.factor(data$id.orig_p)
+    data$id.resp_h  <- as.factor(data$id.resp_h)
+      # data$id.resp_p  <- as.factor(data$id.resp_p)
+    
+    # protocol
     data$proto <- as.factor(data$proto)
+
+    # service
     data$service[data $service == "-"] <- "UNK"
-    
-    # data$vlan <- as.factor(data$vlan)
-    
+    data$service <- as.factor(data$service)
+        
+    # duration
+    data$duration <- as.numeric(data$duration)
+      data$duration[is.na(data$duration)] <- 0
+      
     # total bytes
     data$orig_bytes <- as.numeric(data$orig_bytes)
       data$orig_bytes[is.na(data$orig_bytes)] <- 0
@@ -50,16 +79,6 @@ output: html_document
     
     data$total_bytes <- data$orig_bytes + data$resp_bytes
     
-    # total pkts
-    data$orig_pkts <- as.numeric(data$orig_pkts)
-      data$orig_pkts[is.na(data$orig_pkts)] <- 0
-    
-    data$resp_pkts <- as.numeric(data$resp_pkts)
-      data$resp_pkts[is.na(data$resp_pkts)] <- 0
-    
-  
-    data$total_pkts <- data$orig_pkts + data$resp_pkts
-
     # total ip_bytes
     data$orig_ip_bytes <- as.numeric(data$orig_ip_bytes)
       data$orig_ip_bytes[is.na(data$orig_ip_bytes)] <- 0
@@ -68,6 +87,22 @@ output: html_document
       data$resp_ip_bytes[is.na(data$resp_ip_bytes)] <- 0
     
     data$total_ip_bytes <- data$orig_ip_bytes + data$resp_ip_bytes
+      
+    # total pkts
+    data$orig_pkts <- as.numeric(data$orig_pkts)
+      data$orig_pkts[is.na(data$orig_pkts)] <- 0
+    
+    data$resp_pkts <- as.numeric(data$resp_pkts)
+      data$resp_pkts[is.na(data$resp_pkts)] <- 0
+  
+    data$total_pkts <- data$orig_pkts + data$resp_pkts
+      
+    # vlan
+    data$vlan <- as.factor(data$vlan)
+    
+    drops <- c('orig_bytes', 'resp_bytes', 'orig_pkts', 'resp_pkts', 'orig_ip_bytes', 'resp_ip_bytes')
+    data <- data[ , !(names(data) %in% drops)]
+
     
     ### FUNCTION DECLARATIONS ###########################################################################
     
@@ -82,14 +117,12 @@ output: html_document
       
       if(rm.nas == TRUE) data <- data[complete.cases(data),]
       
-      data$resp_pkts[is.na(data$resp_pkts)] <- 0
+      # data$resp_pkts[is.na(data$resp_pkts)] <- 0
       result <- describe(data)
       result$var <- apply(as.matrix(data), 2, FUN = var)
-      result$sem <- result$sd / sqrt(result$n)
-      result$ci <- result$sem * qt((conf.int/2) + .5, result$n-1)
+      result$ci <- result$se * qt((conf.int/2) + .5, result$n-1)
       
-      return(result)                      ## Gen
-      # return(result[c(2,3,14,4,13,15,16)])  ## Return filtered to n, mean, var, sd, se, sem, and ci
+      return(result)
     }
     
     ## Function:    buildEdgeList
@@ -100,19 +133,38 @@ output: html_document
     buildEdgeList <- function(connlog) {
       ### Build edge list
       
-      temp <- select(connlog, id.orig_h, id.resp_h, proto, total_bytes, duration, vlan, service)
+      temp <- select(connlog, id.orig_h, id.resp_h, proto, total_ip_bytes, total_pkts, total_ip_bytes, duration, vlan, service)
 
-      edges <- summarise(group_by(temp, id.orig_h, id.resp_h, vlan, proto, service), total_bytes = sum(total_bytes))
+      edges <- summarise(group_by(temp, id.orig_h, id.resp_h, vlan, proto, service), total_ip_bytes = sum(total_ip_bytes))
         edges$vlan <- as.factor(edges$vlan)
         edges$service <- as.factor(edges$service)
-        edges <- subset(edges, !is.na(total_bytes))
+        edges <- subset(edges, !is.na(total_ip_bytes))
+        
+        # Set width to a scale of 1:10 (or the actual number if less than 10) based on total_ip_bytes
+        # logsize <- length(connlog$total_ip_bytes)
+        logsize <- length(levels(as.factor(connlog$total_ip_bytes)))
+        
+        if (logsize == 0) {
+          edges$width = 0
+        } else if (logsize > 10) {
+          logsize <- 10
+        }
+        
         edges$width <- as.integer(with(edges,
-                                       cut(total_bytes,
-                                           breaks = quantile(total_bytes, probs = 1:10/10))),
-                                  na.rm = TRUE, include.lowest = TRUE)
+                                       cut(total_ip_bytes,
+                                           breaks = unique(quantile(total_ip_bytes, probs = 1:logsize/logsize))
+                                           ),
+                                  na.rm = TRUE, include.lowest = TRUE))
   
         edges$width[is.na(edges$width)] <- 1
         
+        
+        edges$vlan <- droplevels(edges$vlan)
+        edges$service <- droplevels(edges$service)
+        edges$proto <- droplevels(edges$proto)
+        
+        edges <- arrange(edges, proto, service)
+         
       return(edges)
       
     }
@@ -141,58 +193,30 @@ output: html_document
       nodes <- aggregate(n ~ src, data = nodes, FUN = sum)
     
       names(nodes) <- c("IP", "total_conn")
-      
+    
+      nodes$IP <- as.factor(nodes$IP)
+
       return(nodes)
     }
-    
-    ## Lifted from http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_%28ggplot2%29/
-    multiplot <- function(..., plotlist = NULL, file, cols = 1, layout = NULL) {
-    
-      plots <- c(list(...), plotlist)
-    
-      numPlots = length(plots)
-    
-      if (is.null(layout)) {
-        layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
-                        ncol = cols, nrow = ceiling(numPlots/cols))
-      }
-    
-      if (numPlots == 1) {
-        print(plots[[1]])
-    
-      } else {
-        grid.newpage()
-        pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
-    
-        for (i in 1:numPlots) {
-          matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
-    
-          print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
-                                          layout.pos.col = matchidx$col))
-        }
-      }
-    }
-
     
 ```
 
 # Introduction and Research Questions
 
-1) Can the data set create a visualization of communication flow that informs sensor placement and configuration?
+On a passively monitored network, using the connection logs from the bro network security montior.
 
-2) Is anamolous communication detectable among the hosts in the given data set?
+1) Can the the communication flow be visualized in a way  that informs sensor placement and configuration?
 
-# Descriptive Summary of Data Set
+2) Is is possible to identify anamolous communication between hosts (e.g., for further investigation)?
 
-Initial analysis of the bro connection logs contained in ``r files`` 
-covered a period of time from ``r tm_from`` 
-to ``r tm_to``
+## Descriptive Summary of Data Set
+
+Initial analysis of the bro connection logs contained in ``r files`` covered a period of time from ``r tm_from`` to ``r tm_to``
 (approximately ``r round(tm_duration, 2)`` hours). 
 
-Summary statistics of the overall data set, followed by lists of the IP Addresses with the Top 10 and Bottom 10 volume of connections is listed below:
+Summary statistics of the overall data set, followed by lists of the IP Addresses with the Top 10 and Bottom 10 volume of connections are listed below:
 
 ```{r networkData, echo = FALSE, message = FALSE, warning = FALSE}
-    
   ### Build edge and node lists
     edges <- buildEdgeList(data)
   
@@ -209,133 +233,184 @@ Summary statistics of the overall data set, followed by lists of the IP Addresse
     #                           na.rm = TRUE, include.lowest = TRUE)
     # nodes$vsize[is.na(nodes$vsize)] <- 1
     # nodes <- mutate(nodes, vsize = ifelse(vsize < 1, 1, vsize))
-    
-    summarizeColumns(select(data, 
-                            orig_bytes, 
-                            resp_bytes, 
-                            missed_bytes, 
+
+    dataSummary <- summarizeColumns(select(data, 
+                            duration,
                             total_bytes, 
-                            orig_ip_bytes, 
-                            resp_ip_bytes, 
                             total_ip_bytes, 
-                            orig_pkts, 
-                            resp_pkts, 
                             total_pkts)
-                     )[c(2,3,14,4,13,15,16)]
+                     )[c(2, 3, 9, 4, 8, 10)] # n, mean, var, sd, se, ci
+    # [c(2, 3, 14, 4, 13,15)] # n, mean, var, sd, se, ci
+    dataSummary
     
     head(arrange(nodes, desc(total_conn)), 10)
     head(arrange(nodes, total_conn), 10)
     
 ```
 
-During the logging time period, ``r num_nodes`` and unique nodes with ``r num_conn`` unique connections, and a total of ``r as.numeric(sum(data$total_pkts))`` packets (``r humanReadable(sum(data$total_ip_bytes), standard = "SI")``) were caclulated from data recorded in the observed IP headers. The communications contained ``r length(unique(data$service))`` unique services among ``r length(unique(data$proto))`` protocols. Additionally, bro recorded `r length(unique(data$vlan))` unique VLAN tags.
+During the logging time period, ``r num_nodes`` and unique nodes with ``r num_conn`` unique connections, and a total of ``r as.numeric(sum(data$total_pkts))`` packets (``r humanReadable(sum(data$total_ip_bytes), standard = "SI")``) were caclulated from data recorded in the observed IP headers. 
+The communications contained ``r length(unique(data$service))`` unique services among ``r length(unique(data$proto))`` protocols. 
+Additionally, bro recorded `r length(unique(data$vlan))` unique VLAN tags.
 
-bro measures originator and responder bytes from observed TCP sequence numbers. Missed bytes are also derived from TCP sequence numbers and are used to estimate packet loss. A total of ``r humanReadable(sum(data$total_bytes), standard = "SI")`` were recorded from TCP headers, with ``r humanReadable(sum(data$missed_bytes), standard = "SI")`` missing. The estimated packet loss is approximately ``r round(sum(data$missed_bytes)/sum(data$total_bytes)*100, 1)`%`.
+bro measures originator and responder bytes from observed TCP sequence numbers.
+Missed bytes are also derived from TCP sequence numbers and are used to estimate packet loss. 
+A total of ``r humanReadable(sum(data$total_bytes), standard = "SI")`` were recorded from TCP headers, with ``r humanReadable(sum(data$missed_bytes), standard = "SI")`` missing.
+The estimated packet loss is approximately ``r round(sum(data$missed_bytes)/sum(data$total_bytes)*100, 1)`%`.
 
-*[TODO] Discussion of the results*
+## Exploratory data analysis
 
 ```{r summaryTimeline, echo = FALSE, message = FALSE, warning = FALSE}
   
   bin <- 3600
   d <- select(data, ts, total_pkts)
+  d <- arrange(d, ts)
   d$dattm <- as.POSIXct(d$ts, origin = "1970-01-01")
   
   ggplot(d, aes(dattm)) +
     geom_histogram(binwidth = bin) +
-    ggtitle("Hourly Connections") +
+    ggtitle("Connection Volume, Grouped by Hour") +
     labs(x = "Time", y = "Total Packets") +
-    scale_x_datetime(breaks = date_breaks("4 hours"),
-                     minor_breaks = date_breaks("1 hour"))
-    # scale_y_continuous(trans = log2_trans()) + 
-    # coord_trans(y = log2)
-  
+    scale_x_datetime(labels = date_format("(%d) %H:%M"),
+                     breaks = date_breaks("4 hours"),
+                     minor_breaks = date_breaks("1 hour")) +
+    theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+
 ```
+
+The following plot illustrates the distribution of the dependent variables that will be analyzed in the following sections. In order to isoloate skew, the plot is faceted by protocol (``r levels(data$proto)``). Additionally, solid lines represent the population mean and dashed lines represent the population median. The distance between the vertical lines indicates the skew for each variable.
 
 ```{r summary, echo = FALSE, message = FALSE, warning = FALSE}
-  g1 <- ggplot(data, aes(x=as.factor(vlan))) +
+  g1 <- ggplot(data, aes(x=vlan)) +
     geom_bar(stat = "count") +
     labs(x = "VLAN ID" , y = "Frequency") +
-    ggtitle("Overall VLAN Density") +
-    theme(axis.text.x  = element_text(angle=45))
+    ggtitle("by VLAN") +
+    theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
   
-  g2 <- ggplot(data, aes(x=as.factor(service))) +
+  g2 <- ggplot(data, aes(x=service)) +
     geom_bar(stat = "count") +
-    labs(x = "Service" , y = "Frequency") +
-    ggtitle("Overall Service Density") +
-    theme(axis.text.x  = element_text(angle=45))
+    labs(x = "Service", y = "") +
+    ggtitle("by Service") +
+    theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
 
-  multiplot(g1, g2, cols = 2)
+  grid.arrange(g1, g2, ncol = 2, top = "Population Distribution of Independent Variables")
   
+  g1 <- ggplot(data, aes(duration)) + 
+    geom_histogram() + 
+    geom_vline(xintercept=mean(data$duration), size = 1) + 
+    geom_vline(xintercept=median(data$duration), size = 1, linetype = "longdash") +
+    labs(x = "Duration (s)", y = "Frequency") +
+    scale_x_log10(limits = c(-1, max(data$duration))) +
+    facet_grid(proto ~ .) +
+    theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+
+  g2 <- ggplot(data, aes(total_pkts)) + 
+    geom_histogram() +
+    geom_vline(xintercept=mean(data$total_pkts), size = 1) +
+    geom_vline(xintercept=median(data$total_pkts), size = 1, linetype = "longdash") +
+    labs(x = "Total Packets", y = "") +
+    scale_x_log10(limits = c(-1, max(data$total_pkts))) +
+    facet_grid(proto ~ .) +
+    theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+  
+  g3 <- ggplot(data, aes(total_ip_bytes)) + 
+   geom_histogram() + 
+   geom_vline(xintercept=mean(data$total_ip_bytes), size = 1) + 
+   geom_vline(xintercept=median(data$total_ip_bytes), size = 1, linetype = "longdash") +
+   labs(x = "Total Bytes (by IP)", y = "") +
+   scale_x_log10(limits = c(-1, max(data$total_ip_bytes))) +
+   facet_grid(proto ~ .) +
+   theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+ 
+  g4 <- ggplot(data, aes(total_bytes)) + 
+   geom_histogram() + 
+   geom_vline(xintercept=mean(data$total_bytes), size = 1) + 
+   geom_vline(xintercept=median(data$total_bytes), size = 1, linetype = "longdash") +
+   labs(x = "Total Bytes (by TCP Header)", y = "") +
+   scale_x_log10(limits = c(-1, max(data$total_bytes))) +
+   facet_grid(proto ~ .) +
+   theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+  
+  grid.arrange(g1, g2, g3, ncol = 3, top = "Population Distribution of Dependent Variables")
+
 ```
 
-* *[TODO] Discussion of the heatmap*
-* *[TODO] Interpretation of the dendrograph*
+The levelplot illustrates the interaction of services and vlans, and is non-directional. The intensity of the colors from grey to red represents the total packets.
 
-```{r heatmap, echo = FALSE, message = FALSE, warning = FALSE}
+```{r levelplot, fig.width=24, fig.height=16}
   d <- select(data, vlan, service, total_pkts)
   m <- acast(d, vlan ~ service, value.var = "total_pkts")
-  h1 <- heatmap(m, col = topo.colors(max(length(unique(data$vlan)), length(unique(data$service)))), main = "Total Packets between VLANs and services", xlab = "service", ylab = "VLAN ID")
+
+  levelplot(m, 
+            col.regions = colorRampPalette(c("grey","yellow","orange","red"),space="rgb"),
+            aspect = "iso",
+            scales = list(x = list(rot = 45)),
+            xlab = "vlan ID",
+            ylab = "service", 
+            main = "Total Packets Exchanged between VLANs and Services"
+  )
   
 ```
    
-# Analysis of Network Traffic
+# Analysis of Network Connections
 
 *[TODO] Discussion of the overall network communication picture.* 
 
 Vertices are sized according to the relative volume of connections (inbound and outbound). Edges are directional, and colored by protocol. Edges thicknesses reflect the relative number of bytes transferred.
 
 ```{r networkgraph, echo = FALSE, message = FALSE, warning = FALSE}
-
-  ### Build the graph
-    colrs <- rainbow(length(levels(as.factor(edges$proto))))
-    edges$colors <- colrs[as.factor(edges$proto)]
-    
-    g <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE) # Builds the basic igraph object
-    
-    # l <- layout_randomly(g)
-    # l <- layout_nicely(g)
-    # l <- layout_on_grid(g)
-    # l <- layout_on_sphere(g)
-    l <- layout_with_fr(g)
-    # l <- layout_with_kk(g)
-    # l <- layout_with_mds(g)
-    # l <- layout_with_drl(g)
-    # l <- layout_with_lgl(g)
-    # l <- layout_with_dh(g)
-    # l <- layout_with_fr(g)
-    
-    l <- norm_coords(l, ymin = -10, ymax = 10, xmin = -10, xmax = 10)
-    
-    # par(mfrow = c(1, 1), mar = c(0, 0, 0, 0))
-
-    plot(g,                                       # Configures the aesthetics of the plot
-       # vertex.size =  as.integer(V(g)$vsize),   # Vertex size is a function of the total number of connections
-       vertex.size = coreness(g),
-       vertex.label = V(g)$name,                  # Vertex name should be the node name (IP address)
-       # vertex.label.family = "Times",
-       vertex.label.cex = .75,
-       vertex.label.degree = 1,
-       # vertex.shape = "pie",
-       edge.width = E(g)$width*0.5,               # Edge weight is a function of the number of bytes transferred
-       edge.color = E(g)$colors,                  # Edge color is a protocol (ICMP, TCP, UDP)
-       # edge.color = E(g)$vlan,                  # Edge color is a VLAN
-       edge.arrow.size =  E(g)$width*0.1,
-       edge.curved = TRUE, 
-       layout = l
-       )
-    
-    legend(x = -1, 
-           y = -.9, 
-           c("icmp", "tcp", "udp"),
-           pch = 21, 
-           col = "#777777", 
-           pt.bg = colrs, 
-           pt.cex = 2, 
-           cex = .8,
-           bty = "n",
-           ncol = 1,
-           title = "Protocol"
-           )
+# 
+#   ### Build the graph
+#     colrs <- rainbow(length(levels(edges$proto)))
+#     edges$colors <- colrs[edges$proto]
+#     
+#     g <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE) # Builds the basic igraph object
+#     
+#     # various layout algorithms
+#     
+#     # l <- layout_randomly(g)
+#     # l <- layout_nicely(g)
+#     # l <- layout_on_grid(g)
+#     # l <- layout_on_sphere(g)
+#     l <- layout_with_fr(g)
+#     # l <- layout_with_kk(g)
+#     # l <- layout_with_mds(g)
+#     # l <- layout_with_drl(g)
+#     # l <- layout_with_lgl(g)
+#     # l <- layout_with_dh(g)
+#     # l <- layout_with_fr(g)
+#     
+#     l <- norm_coords(l, ymin = -10, ymax = 10, xmin = -10, xmax = 10)
+#     
+#     # par(mfrow = c(1, 1), mar = c(0, 0, 0, 0))
+# 
+#     plot(g,                                       # Configures the aesthetics of the plot
+#        vertex.size = coreness(g),
+#        vertex.label = V(g)$IP,                  # Vertex name should be the node name (IP address)
+#        # vertex.label.family = "Times",
+#        vertex.label.cex = .75,
+#        vertex.label.degree = 1,
+#        edge.width = E(g)$width*0.5,               # Edge weight is a function of the number of bytes transferred
+#        edge.color = E(g)$colors,                  # Edge color is a protocol (ICMP, TCP, UDP)
+#        edge.arrow.size =  E(g)$width*0.1,
+#        edge.curved = TRUE, 
+#        # layout = l,
+#        main = "Network Connection Visualization"
+#        )
+#     
+#     legend(x = -1,
+#            y = -.9,
+#            c("icmp", "tcp", "udp"),
+#            pch = 21,
+#            col = "#777777",
+#            pt.bg = colrs,
+#            pt.cex = 2,
+#            cex = .8,
+#            bty = "n",
+#            ncol = 1,
+#            title = "Protocol"
+#            )
+#     
+#     
 ```
 
 The following graph separates the network communications by protocol (e.g. `r levels(data$proto)`).
@@ -343,57 +418,37 @@ The following graph separates the network communications by protocol (e.g. `r le
 *[TODO] Discussion of the overall network communication picture.* 
 
 ```{r networkgraph_byproto, echo = FALSE, message = FALSE, warning = FALSE}
-
-    # par(mfrow = c(1, 3), mar = c(0, 0, 0, 0))
   
     for(prot in levels(data$proto)) {
       
       ### Build edge list
-      temp <- subset(select(data, 
-                            id.orig_h, 
-                            id.resp_h, 
-                            proto, 
-                            orig_bytes, 
-                            resp_bytes, 
-                            duration, 
-                            vlan, 
-                            service),
-                     proto == prot)
-      
-        temp$orig_bytes <- as.numeric(temp$orig_bytes)
-        temp$resp_bytes <- as.numeric(temp$resp_bytes)
-        temp$total_bytes <- temp$orig_bytes + temp$resp_bytes
-      
-      e <- summarise(group_by(temp, id.orig_h, id.resp_h, vlan, proto, service), total_bytes = sum(total_bytes))
-        e <- subset(e, !is.na(total_bytes))
+      e <- buildEdgeList(subset(data, proto == prot))
+      n <- buildVertexList(e)
     
-      e$width <- e$total_bytes/sum(e$total_bytes)*100
-      e$width[is.na(e$width)] <- 1
-      
-      e$proto <- as.factor(e$proto)
-    
-    colrs <- rainbow(length(levels(as.factor(edges$service))))
-    e$colors <- colrs[as.factor(e$service)]        
+    colrs <- rainbow(length(levels(edges$service)))
+    e$colors <- colrs[e$service]
   
       h <- graph_from_data_frame(d = e,
-                                 vertices = nodes, # use the existing (unmodified) node list...
+                                 vertices = n, # use the existing (unmodified) node list...
                                  directed = TRUE) 
       
-      h <- delete_vertices(h, degree(h) == 0)     # ...remove nodes that do not have corresponding edges
+      # h <- delete_vertices(h, degree(h) == 0)     # ...remove nodes that do not have corresponding edges
   
       l <- layout_with_fr(h)
     
       plot(h,                                       # Configures the aesthetics of the plot
          # vertex.size =  as.integer(V(g)$vsize),   # Vertex size is a function of the total number of connections
-         vertex.size = coreness(h)*2,
-         vertex.label = V(h)$name,                  # Vertex name should be the node name (IP address)
+         vertex.size = coreness(h),
+         # vertex.label = V(h)$name,                  # Vertex name should be the node name (IP address)
+         vertex.label = NA,                  # Omit Vertex name
          # vertex.label.family = "Times",
-         vertex.label.cex = .75,
-         vertex.label.degree = 1,
+         # vertex.label.cex = .75,
+         # vertex.label.degree = 1,
          # vertex.shape = "pie",
          edge.width = E(h)$width*0.5,               # Edge weight is a function of the number of bytes transferred
          edge.color = E(h)$colors,                  # Edge color is by service (dns, http, ssh, etc.)
-         edge.arrow.size =  E(h)$width*0.1,
+         # edge.arrow.size =  E(h)$width*0.1,
+         edge.arrow.size =  0.1,
          edge.curved = TRUE,
          layout = l,
          
@@ -402,38 +457,223 @@ The following graph separates the network communications by protocol (e.g. `r le
          main = paste("Network graph by Protocol (", prot, ")")
          ) 
       
-      legend(x = -1, 
-       y = -1, 
-       unique(E(h)$service), 
-       pch = 21, 
-       col = "#777777", 
-       pt.bg = colrs, 
-       pt.cex = 2, 
-       
+      legend(x = -1,
+       y = -1,
+       unique(E(h)$service),
+       pch = 21,
+       col = "#777777",
+       pt.bg = colrs,
+       pt.cex = 2,
        cex = .8,
        bty = "n",
        ncol = 1,
        title = "Service"
-       )
+      )
       
     }
 ```  
 
 ## Network Traffic Subgraph 
 
+``` {r anovastats, echo = FALSE, message = FALSE, warning = FALSE}
+   ### Set iterators and data subset
+    index <- 0
 
+    for (i in 1:20) {
+      
+      index <- index + 1
+      index <- sample(1:length(nodes$IP), 1, replace = FALSE)  # uncomment for diagnostic mode: random selection
+      thisnode <- as.character(nodes$IP[index])
+      
+      # thisnode <- "155.19.59.227"  # uncomment for diagnostic mode: single selection
+      # thisnode <- "50.63.243.228"  # uncomment for diagnostic mode: single selection
+      # thisnode <- "50.19.59.43"  # uncomment for diagnostic mode: single selection
+
+      subdata <- subset(select(data, 
+                               id.orig_h, 
+                               id.resp_h, 
+                               proto, 
+                               service, 
+                               duration, 
+                               total_bytes, 
+                               total_pkts, 
+                               total_ip_bytes, 
+                               vlan),
+                    (id.orig_h == thisnode | id.resp_h == thisnode))
+                    
+      subdata$id.orig_h <- droplevels(subdata$id.orig_h)
+      subdata$id.resp_h <- droplevels(subdata$id.resp_h)
+      subdata$service <- droplevels(subdata$service)
+      
+      
+      subdatastats <- summarizeColumns(subdata[,5:8])[c(2, 3, 14, 4, 13,15)]  # (n, mean, var, sd, se, ci) 
+                                                                              # for (duration, total_bytes, total_pkts, total_ip_bytes)
+      
+      subdatastats
+      
+      ## Diagnostic plots
+      g1 <- ggplot(subdata, aes(duration)) + 
+        geom_histogram() +
+        geom_vline(xintercept=mean(subdata$duration), size = 1) +   # subdata is bold: solid = mean / dashed = median
+        geom_vline(xintercept=median(subdata$duration), size = 1, linetype = "longdash") +      
+        geom_vline(xintercept=mean(data$duration), size = 0.5) +    # population is normal: solid = mean / dashed = median
+        geom_vline(xintercept=median(data$duration), size = 0.5, linetype = "longdash") +
+        scale_x_log10(limits = c(-1, max(subdata$duration))) +
+        facet_grid(proto ~ .) +
+        theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+      
+      g2 <- ggplot(subdata, aes(total_pkts)) + 
+        geom_histogram() + 
+        geom_vline(xintercept=mean(subdata$total_pkts), size = 1) +
+        geom_vline(xintercept=median(subdata$total_pkts), size = 1, linetype = "longdash") +      
+        geom_vline(xintercept=mean(data$total_pkts), size = 0.5) + 
+        geom_vline(xintercept=median(data$total_pkts), size = 0.5, linetype = "longdash") +
+        scale_x_log10(limits = c(-1, max(subdata$total_pkts))) +
+        facet_grid(proto ~ .) +    
+        theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+  
+      # g3 <- ggplot(subdata, aes(total_bytes)) + 
+      #   geom_histogram() + 
+      #   geom_vline(xintercept=mean(subdata$total_bytes), size = 1) +
+      #   geom_vline(xintercept=median(subdata$total_bytes), size = 1, linetype = "longdash") +      
+      #   geom_vline(xintercept=mean(data$total_bytes), size = 0.5) + 
+      #   geom_vline(xintercept=median(data$total_bytes), size = 0.5, linetype = "longdash") +
+      #   scale_x_log10(limits = c(-1, max(subdata$total_bytes))) +
+      #   facet_grid(proto ~ .) +    
+      #   theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+      
+      g4 <- ggplot(subdata, aes(total_ip_bytes)) + 
+        geom_histogram() + 
+        geom_vline(xintercept=mean(subdata$total_ip_bytes), size = 1) +
+        geom_vline(xintercept=median(subdata$total_ip_bytes), size = 1, linetype = "longdash") +      
+        geom_vline(xintercept=mean(data$total_ip_bytes), size = 0.5) + 
+        geom_vline(xintercept=median(data$total_ip_bytes), size = 0.5, linetype = "longdash") +
+        scale_x_log10(limits = c(-1, max(subdata$total_ip_bytes))) +
+        facet_grid(proto ~ .) +
+        theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+      
+        grid.arrange(g1, g2, g4, ncol = 3, top = paste("Index", index, ": Sample Distribution of Dependent Variables for ", thisnode))
+  
+      # [TODO] Add the overall median and 1st/3rd QTR lines
+      g1 <- ggplot(subdata, aes(x = id.resp_h, y = duration)) +
+        geom_boxplot() +
+        labs(x = "", y = "Duration (s)") +
+        geom_hline(yintercept=mean(subdata$duration), size = 1) +
+        geom_hline(yintercept=median(subdata$duration), size = 1, linetype = "longdash") +      
+        geom_hline(yintercept=mean(data$duration), size = 0.5) + 
+        geom_hline(yintercept=median(data$duration), size = 0.5, linetype = "longdash") +
+        facet_grid(proto ~ .) +    
+        theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+        
+      
+      g2 <- ggplot(subdata, aes(x = service, y = duration)) +
+        geom_boxplot() + 
+        labs(x = "", y = "") +
+        geom_hline(yintercept=mean(subdata$duration), size = 1) +
+        geom_hline(yintercept=median(subdata$duration), size = 1, linetype = "longdash") +      
+        geom_hline(yintercept=mean(data$duration), size = 0.5) + 
+        geom_hline(yintercept=median(data$duration), size = 0.5, linetype = "longdash") +
+        facet_grid(proto ~ .) +    
+        theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+        
+      
+      # g3 <- ggplot(subdata, aes(x = id.resp_h, y = total_bytes)) +
+      #   geom_boxplot() +
+      #   labs(x = "Dest IP", y = "Total IP Bytes") +
+      #   geom_hline(yintercept=mean(subdata$total_bytes), size = 1) +
+      #   geom_hline(yintercept=median(subdata$total_bytes), size = 1, linetype = "longdash") +      
+      #   geom_hline(yintercept=mean(data$total_bytes), size = 0.5) + 
+      #   geom_hline(yintercept=median(data$total_bytes), size = 0.5, linetype = "longdash") +
+      #   facet_grid(proto ~ .) +    
+      #   theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+        
+      
+      g4 <- ggplot(subdata, aes(x = service, y = total_ip_bytes)) +
+        geom_boxplot() +
+        labs(x = "Service", y = "") +
+        geom_hline(yintercept=mean(subdata$total_ip_bytes), size = 1) +
+        geom_hline(yintercept=median(subdata$total_ip_bytes), size = 1, linetype = "longdash") +      
+        geom_hline(yintercept=mean(data$total_ip_bytes), size = 0.5) + 
+        geom_hline(yintercept=median(data$total_ip_bytes), size = 0.5, linetype = "longdash") +
+        facet_grid(proto ~ .) +    
+        theme(axis.text.x  = element_text(angle=45, hjust = 1, vjust = 1, size = 8))
+        
+    
+      grid.arrange(g1, g2, g4, ncol = 3, top = paste("Index", index, ": Analysis of node", thisnode))
+      
+  
+  # [TODO] ANOVA
+      # sub.result <- lm(subdata$duration ~ subdata$id.resp_h + subdata$service)  
+      # summary(sub.result)
+      # anova(sub.result)
+      # 
+      # 
+      # sub.plot <- data.frame(Fitted = fitted(sub.result), Residuals = resid(sub.result), Treatment = subdata$service)
+      # ggplot(sub.plot, aes(Fitted, Residuals, colour = Treatment)) + geom_point()
+      
+  ### Build subgraph edge and node lists
+  
+      subedges <- buildEdgeList(subdata)
+      subnodes <- buildVertexList(subedges)
+  
+      colrs <- rainbow(length(levels(subedges$service)))
+      subedges$colors <- colrs[subedges$service]
+  
+      s <- graph_from_data_frame(d = subedges, vertices = subnodes, directed = TRUE) # Builds the basic igraph object
+  
+      l <- layout_with_fr(s)
+      l <- norm_coords(l, ymin = -10, ymax = 10, xmin = -10, xmax = 10)
+      
+      plot(s,                                       # Configures the aesthetics of the plot
+         # vertex.size =  as.integer(V(g)$vsize),   # Vertex size is a function of the total number of connections
+         vertex.size = coreness(s)*2,
+         # vertex.label.family = "Times",
+         vertex.label.cex = .75,
+         vertex.label.degree = 1,
+         # vertex.shape = "pie",
+         # edge.color = E(s)$vlan,                  # Edge color is a VLAN
+         edge.width = E(s)$width*0.5,               # Edge weight is a function of the number of bytes transferred
+         edge.color = E(s)$colors,                  # Edge color is a protocol (ICMP, TCP, UDP)
+         # edge.arrow.size =  E(s)$width*0.2,
+         edge.arrow.size =  0.5,
+         edge.curved = TRUE,
+         layout = l,
+         main = paste("Index", index, ": Subgraph of node", thisnode)
+  
+         )
+      
+      curve_multiple(s, start = 0.2)
+  
+      legend(x = -2,
+             y = -.9,
+             levels(subedges$service),
+             pch = 21,
+             col = "#777777",
+             pt.bg = colrs,
+             pt.cex = 2,
+             cex = .8,
+             bty = "n",
+             ncol = 1,
+             title = "Service"
+             )
+    }
+
+```
 # TO DO SECTION
 
 ```{r graphstats, echo = FALSE, message = FALSE, warning = FALSE}
-mean(nodes$total_bytes)
-sd(nodes$total_bytes)
-mean(edges$total_bytes)
-sd(edges$total_bytes)
 
-reciprocity(g)
-diameter(g)
+# mean(nodes$total_bytes)
+# sd(nodes$total_bytes)
+# mean(edges$total_bytes)
+# sd(edges$total_bytes)
+# 
+# reciprocity(g)
+# diameter(g)
+# 
+# hist(degree(g))
+# 
 
-hist(degree(g))
 
 ```
 
